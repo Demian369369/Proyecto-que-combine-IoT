@@ -1,0 +1,589 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AirSense - Monitor Ambiental</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Barlow+Condensed:wght@300;500;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:       #0a0c0f;
+    --surface:  #111418;
+    --border:   #1e2530;
+    --accent:   #00e5c8;
+    --warn:     #f59e0b;
+    --danger:   #ef4444;
+    --text:     #cdd5e0;
+    --muted:    #4a5568;
+    --temp-clr: #f97316;
+    --hum-clr:  #38bdf8;
+    --mono:     'Share Tech Mono', monospace;
+    --sans:     'Barlow Condensed', sans-serif;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-weight: 300;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* scanline overlay */
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0,0,0,.07) 2px,
+      rgba(0,0,0,.07) 4px
+    );
+    pointer-events: none;
+    z-index: 999;
+  }
+
+  /* ── Header ─────────────────────────────────────────────── */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 18px 32px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    position: sticky; top: 0; z-index: 100;
+  }
+
+  .logo {
+    font-family: var(--mono);
+    font-size: 1.25rem;
+    color: var(--accent);
+    letter-spacing: .12em;
+    text-transform: uppercase;
+  }
+  .logo span { color: var(--muted); font-size: .75rem; display: block; letter-spacing: .04em; }
+
+  .header-right {
+    display: flex; gap: 24px; align-items: center;
+  }
+  .badge {
+    font-family: var(--mono);
+    font-size: .7rem;
+    padding: 4px 10px;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    letter-spacing: .06em;
+  }
+  .badge.online { border-color: var(--accent); color: var(--accent); }
+
+  #clock {
+    font-family: var(--mono);
+    font-size: .85rem;
+    color: var(--muted);
+  }
+
+  /* ── Grid principal ──────────────────────────────────────── */
+  .grid {
+    display: grid;
+    grid-template-columns: 260px 1fr 280px;
+    grid-template-rows: auto auto 1fr;
+    gap: 1px;
+    background: var(--border);
+    min-height: calc(100vh - 61px);
+  }
+
+  /* ── Panel base ─────────────────────────────────────────── */
+  .panel {
+    background: var(--surface);
+    padding: 24px;
+    position: relative;
+  }
+  .panel-label {
+    font-family: var(--mono);
+    font-size: .6rem;
+    color: var(--muted);
+    letter-spacing: .15em;
+    text-transform: uppercase;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 10px;
+    margin-bottom: 20px;
+  }
+  .panel-label::before {
+    content: '// ';
+    color: var(--accent);
+  }
+
+  /* ── Lado izquierdo: lecturas actuales ───────────────────── */
+  .sidebar-left {
+    grid-row: 1 / 4;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+
+  .reading-card {
+    padding: 28px 24px;
+    background: var(--surface);
+    border-left: 3px solid var(--border);
+    transition: border-color .3s;
+  }
+  .reading-card.temp { border-color: var(--temp-clr); }
+  .reading-card.hum  { border-color: var(--hum-clr);  }
+  .reading-card.hi   { border-color: var(--warn);      }
+  .reading-card.comfort { border-color: var(--accent); }
+
+  .rc-label {
+    font-family: var(--mono);
+    font-size: .55rem;
+    letter-spacing: .2em;
+    color: var(--muted);
+    text-transform: uppercase;
+    margin-bottom: 12px;
+  }
+
+  .rc-value {
+    font-family: var(--mono);
+    font-size: 3.2rem;
+    line-height: 1;
+    font-weight: 400;
+  }
+  .rc-value.temp { color: var(--temp-clr); }
+  .rc-value.hum  { color: var(--hum-clr);  }
+  .rc-value.hi   { color: var(--warn);     }
+  .rc-value.comfort { color: var(--accent); font-size: 1.4rem; letter-spacing: .05em; }
+
+  .rc-unit {
+    font-family: var(--mono);
+    font-size: .9rem;
+    color: var(--muted);
+    margin-left: 4px;
+  }
+
+  /* ── Centro: graficas ────────────────────────────────────── */
+  .center { grid-row: 1 / 4; display: flex; flex-direction: column; gap: 1px; }
+
+  .chart-panel {
+    flex: 1;
+    padding: 24px;
+    background: var(--surface);
+    display: flex;
+    flex-direction: column;
+  }
+  .chart-wrap { flex: 1; position: relative; min-height: 180px; }
+
+  /* ── Lado derecho ────────────────────────────────────────── */
+  .sidebar-right {
+    grid-row: 1 / 4;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+
+  /* Prediccion */
+  .pred-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .pred-row:last-child { border: none; }
+  .pred-key  { font-family: var(--mono); font-size: .65rem; color: var(--muted); text-transform: uppercase; }
+  .pred-val  { font-family: var(--mono); font-size: 1.3rem; }
+  .pred-val.t { color: var(--temp-clr); }
+  .pred-val.h { color: var(--hum-clr);  }
+  .pred-val.c { color: var(--accent);   }
+
+  /* Alertas */
+  .alert-list { display: flex; flex-direction: column; gap: 8px; overflow-y: auto; max-height: 320px; }
+  .alert-item {
+    padding: 10px 12px;
+    border-left: 3px solid var(--warn);
+    background: rgba(245,158,11,.06);
+    font-size: .8rem;
+    line-height: 1.5;
+  }
+  .alert-item.critical { border-color: var(--danger); background: rgba(239,68,68,.06); }
+  .alert-item.info     { border-color: var(--accent);  background: rgba(0,229,200,.06); }
+  .alert-time { font-family: var(--mono); font-size: .6rem; color: var(--muted); display: block; margin-top: 4px; }
+  .alert-ack  {
+    font-family: var(--mono); font-size: .55rem; color: var(--muted);
+    background: none; border: 1px solid var(--border); padding: 2px 8px;
+    cursor: pointer; float: right; margin-top: 6px;
+    transition: all .2s;
+  }
+  .alert-ack:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* Stats bar */
+  .stats-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+  }
+  .stat-box { padding: 14px; border: 1px solid var(--border); }
+  .stat-box .label { font-family: var(--mono); font-size: .55rem; color: var(--muted); letter-spacing: .12em; }
+  .stat-box .value { font-family: var(--mono); font-size: 1.4rem; margin-top: 6px; }
+  .stat-box .value.t { color: var(--temp-clr); }
+  .stat-box .value.h { color: var(--hum-clr); }
+
+  /* Dispositivos */
+  .device-list { display: flex; flex-direction: column; gap: 6px; }
+  .device-item {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 8px 10px; border: 1px solid var(--border);
+    font-family: var(--mono); font-size: .65rem;
+  }
+  .device-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 8px var(--accent);
+    animation: pulse 2s infinite;
+  }
+  @keyframes pulse {
+    0%,100% { opacity: 1; } 50% { opacity: .3; }
+  }
+
+  /* Confidence bar */
+  .conf-bar-wrap {
+    margin-top: 16px;
+  }
+  .conf-label { font-family: var(--mono); font-size: .6rem; color: var(--muted); margin-bottom: 6px; }
+  .conf-bar {
+    height: 4px; background: var(--border); width: 100%;
+    position: relative; overflow: hidden;
+  }
+  .conf-fill {
+    height: 100%; background: var(--accent);
+    transition: width .8s ease;
+    width: 0%;
+  }
+
+  /* Footer nota */
+  .footnote {
+    grid-column: 1/-1;
+    background: var(--surface);
+    padding: 10px 32px;
+    font-family: var(--mono);
+    font-size: .6rem;
+    color: var(--muted);
+    border-top: 1px solid var(--border);
+    display: flex; justify-content: space-between;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    AirSense
+    <span>Sistema de Monitoreo Ambiental con IA</span>
+  </div>
+  <div class="header-right">
+    <span class="badge online" id="conn-badge">CONECTADO</span>
+    <span class="badge" id="device-badge">ESP32-DHT11-001</span>
+    <span id="clock"></span>
+  </div>
+</header>
+
+<div class="grid">
+
+  <!-- ── Sidebar izquierdo ── -->
+  <div class="sidebar-left">
+    <div class="panel-label" style="padding:20px 24px 0; background:var(--surface);">lecturas actuales</div>
+
+    <div class="reading-card temp">
+      <div class="rc-label">temperatura</div>
+      <div class="rc-value temp" id="val-temp">--<span class="rc-unit">°C</span></div>
+    </div>
+
+    <div class="reading-card hum">
+      <div class="rc-label">humedad relativa</div>
+      <div class="rc-value hum" id="val-hum">--<span class="rc-unit">%</span></div>
+    </div>
+
+    <div class="reading-card hi">
+      <div class="rc-label">indice de calor</div>
+      <div class="rc-value hi" id="val-hi">--<span class="rc-unit">°C</span></div>
+    </div>
+
+    <div class="reading-card comfort" style="flex:1;">
+      <div class="rc-label">nivel de confort</div>
+      <div class="rc-value comfort" id="val-comfort">--</div>
+    </div>
+
+    <div class="panel" style="flex:0;">
+      <div class="panel-label">estadisticas 24h</div>
+      <div class="stats-grid" id="stats-grid">
+        <div class="stat-box"><div class="label">T. MIN</div><div class="value t" id="st-tmin">--</div></div>
+        <div class="stat-box"><div class="label">T. MAX</div><div class="value t" id="st-tmax">--</div></div>
+        <div class="stat-box"><div class="label">H. MIN</div><div class="value h" id="st-hmin">--</div></div>
+        <div class="stat-box"><div class="label">H. MAX</div><div class="value h" id="st-hmax">--</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Centro: graficas ── -->
+  <div class="center">
+    <div class="chart-panel">
+      <div class="panel-label">temperatura historica — ultimas 6 horas</div>
+      <div class="chart-wrap">
+        <canvas id="chart-temp"></canvas>
+      </div>
+    </div>
+    <div class="chart-panel">
+      <div class="panel-label">humedad historica — ultimas 6 horas</div>
+      <div class="chart-wrap">
+        <canvas id="chart-hum"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Sidebar derecho ── -->
+  <div class="sidebar-right">
+
+    <div class="panel">
+      <div class="panel-label">prediccion IA (+30 min)</div>
+      <div class="pred-row">
+        <span class="pred-key">temp. pred.</span>
+        <span class="pred-val t" id="pred-temp">--°C</span>
+      </div>
+      <div class="pred-row">
+        <span class="pred-key">hum. pred.</span>
+        <span class="pred-val h" id="pred-hum">--%</span>
+      </div>
+      <div class="pred-row">
+        <span class="pred-key">modelo</span>
+        <span class="pred-val c" style="font-size:.9rem;">LSTM</span>
+      </div>
+      <div class="conf-bar-wrap">
+        <div class="conf-label">confianza del modelo</div>
+        <div class="conf-bar"><div class="conf-fill" id="conf-fill"></div></div>
+        <div style="font-family:var(--mono);font-size:.6rem;color:var(--muted);margin-top:4px;" id="conf-pct">--</div>
+      </div>
+    </div>
+
+    <div class="panel" style="flex:1; overflow:hidden;">
+      <div class="panel-label">alertas activas</div>
+      <div class="alert-list" id="alert-list">
+        <div style="font-family:var(--mono);font-size:.7rem;color:var(--muted);">Sin alertas activas</div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-label">dispositivos en red</div>
+      <div class="device-list" id="device-list">
+        <div style="font-family:var(--mono);font-size:.7rem;color:var(--muted);">Cargando...</div>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="footnote">
+    <span>AirSense v1.0 — DHT11 / ESP32 / Flask / SQLite / TensorFlow LSTM</span>
+    <span id="last-update">ultima actualizacion: --</span>
+  </div>
+</div>
+
+<script>
+// ── Configuracion ──────────────────────────────────────────
+const API      = '';          // '' = mismo origen; o 'http://192.168.1.100:5000'
+const DEVICE   = 'ESP32-DHT11-001';
+const INTERVAL = 10000;       // ms entre refrescos
+
+// ── Reloj ──────────────────────────────────────────────────
+function updateClock() {
+  const now = new Date();
+  document.getElementById('clock').textContent =
+    now.toLocaleTimeString('es-MX', { hour12: false });
+}
+setInterval(updateClock, 1000);
+updateClock();
+
+// ── Chart.js helpers ───────────────────────────────────────
+const chartDefaults = {
+  responsive: true,
+  maintainAspectRatio: false,
+  animation: { duration: 400 },
+  scales: {
+    x: {
+      ticks: { color: '#4a5568', font: { family: 'Share Tech Mono', size: 10 },
+               maxTicksLimit: 8 },
+      grid: { color: '#1e2530' },
+    },
+    y: {
+      ticks: { color: '#4a5568', font: { family: 'Share Tech Mono', size: 10 } },
+      grid: { color: '#1e2530' },
+    },
+  },
+  plugins: { legend: { display: false } },
+};
+
+function makeChart(id, color, label) {
+  const ctx = document.getElementById(id).getContext('2d');
+  const gradient = ctx.createLinearGradient(0, 0, 0, 200);
+  gradient.addColorStop(0, color + '33');
+  gradient.addColorStop(1, color + '00');
+
+  return new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: [],
+      datasets: [{
+        label,
+        data: [],
+        borderColor: color,
+        backgroundColor: gradient,
+        borderWidth: 2,
+        pointRadius: 2,
+        pointHoverRadius: 5,
+        fill: true,
+        tension: 0.4,
+      }],
+    },
+    options: { ...chartDefaults },
+  });
+}
+
+const tempChart = makeChart('chart-temp', '#f97316', 'Temperatura');
+const humChart  = makeChart('chart-hum',  '#38bdf8', 'Humedad');
+
+function updateCharts(readings) {
+  const labels = readings.map(r => {
+    const d = new Date(r.created_at);
+    return d.toLocaleTimeString('es-MX', { hour12: false, hour:'2-digit', minute:'2-digit' });
+  });
+  const temps = readings.map(r => r.temperature);
+  const hums  = readings.map(r => r.humidity);
+
+  tempChart.data.labels         = labels;
+  tempChart.data.datasets[0].data = temps;
+  tempChart.update();
+
+  humChart.data.labels          = labels;
+  humChart.data.datasets[0].data = hums;
+  humChart.update();
+}
+
+// ── Fetch helpers ──────────────────────────────────────────
+async function fetchJSON(path) {
+  try {
+    const r = await fetch(API + path);
+    if (!r.ok) return null;
+    return await r.json();
+  } catch { return null; }
+}
+
+// ── Actualizar lectura actual ──────────────────────────────
+async function updateLatest() {
+  const data = await fetchJSON(`/api/readings/latest?device_id=${DEVICE}`);
+  if (!data) { document.getElementById('conn-badge').textContent = 'SIN SEÑAL'; return; }
+
+  document.getElementById('conn-badge').textContent = 'CONECTADO';
+  document.getElementById('conn-badge').className = 'badge online';
+
+  document.getElementById('val-temp').innerHTML    = `${data.temperature}<span class="rc-unit">°C</span>`;
+  document.getElementById('val-hum').innerHTML     = `${data.humidity}<span class="rc-unit">%</span>`;
+  document.getElementById('val-hi').innerHTML      = data.heat_index
+    ? `${data.heat_index}<span class="rc-unit">°C</span>` : '--';
+  document.getElementById('val-comfort').textContent = (data.comfort || '--').replace('_', ' ').toUpperCase();
+  document.getElementById('last-update').textContent =
+    'ultima actualizacion: ' + new Date(data.created_at).toLocaleTimeString('es-MX');
+}
+
+// ── Estadisticas ───────────────────────────────────────────
+async function updateStats() {
+  const s = await fetchJSON(`/api/readings/stats?hours=24&device_id=${DEVICE}`);
+  if (!s) return;
+  document.getElementById('st-tmin').textContent = s.temperature.min + '°C';
+  document.getElementById('st-tmax').textContent = s.temperature.max + '°C';
+  document.getElementById('st-hmin').textContent = s.humidity.min + '%';
+  document.getElementById('st-hmax').textContent = s.humidity.max + '%';
+}
+
+// ── Graficas ───────────────────────────────────────────────
+async function updateReadings() {
+  const data = await fetchJSON(`/api/readings?device_id=${DEVICE}&hours=6&limit=200`);
+  if (!data) return;
+  const sorted = [...data].reverse();
+  updateCharts(sorted);
+}
+
+// ── Prediccion ────────────────────────────────────────────
+async function updatePrediction() {
+  const p = await fetchJSON(`/api/predictions/latest?device_id=${DEVICE}`);
+  if (!p || p.error) {
+    document.getElementById('pred-temp').textContent = 'entrenando...';
+    document.getElementById('pred-hum').textContent  = '';
+    return;
+  }
+  document.getElementById('pred-temp').textContent = p.predicted_temperature + '°C';
+  document.getElementById('pred-hum').textContent  = p.predicted_humidity + '%';
+
+  if (p.confidence !== null && p.confidence !== undefined) {
+    const pct = Math.round(p.confidence * 100);
+    document.getElementById('conf-fill').style.width = pct + '%';
+    document.getElementById('conf-pct').textContent  = pct + '%';
+  }
+}
+
+// ── Alertas ────────────────────────────────────────────────
+async function updateAlerts() {
+  const alerts = await fetchJSON('/api/alerts?active=true');
+  const list   = document.getElementById('alert-list');
+  if (!alerts || alerts.length === 0) {
+    list.innerHTML = '<div style="font-family:var(--mono);font-size:.7rem;color:var(--muted);">Sin alertas activas</div>';
+    return;
+  }
+  list.innerHTML = alerts.map(a => `
+    <div class="alert-item ${a.level}">
+      <button class="alert-ack" onclick="ackAlert(${a.id})">ACK</button>
+      ${a.message}
+      <span class="alert-time">${new Date(a.created_at).toLocaleString('es-MX')}</span>
+    </div>
+  `).join('');
+}
+
+async function ackAlert(id) {
+  await fetch(`${API}/api/alerts/${id}/ack`, { method: 'POST' });
+  updateAlerts();
+}
+
+// ── Dispositivos ───────────────────────────────────────────
+async function updateDevices() {
+  const devs = await fetchJSON('/api/devices');
+  const list  = document.getElementById('device-list');
+  if (!devs || devs.length === 0) {
+    list.innerHTML = '<div style="font-family:var(--mono);font-size:.7rem;color:var(--muted);">Sin dispositivos</div>';
+    return;
+  }
+  list.innerHTML = devs.map(d => `
+    <div class="device-item">
+      <span><div class="device-dot" style="display:inline-block;margin-right:8px;"></div>${d.device_id}</span>
+      <span style="color:var(--muted);">${d.total_readings} lecturas</span>
+    </div>
+  `).join('');
+}
+
+// ── Loop principal ─────────────────────────────────────────
+async function refresh() {
+  await Promise.all([
+    updateLatest(),
+    updateStats(),
+    updateReadings(),
+    updatePrediction(),
+    updateAlerts(),
+    updateDevices(),
+  ]);
+}
+
+refresh();
+setInterval(refresh, INTERVAL);
+</script>
+</body>
+</html>
